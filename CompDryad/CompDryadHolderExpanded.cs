@@ -1,0 +1,166 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using RimWorld;
+using UnityEngine;
+using Verse;
+using Verse.Sound;
+
+namespace GauranlenTreeExpanded
+{
+
+    public abstract class CompDryadHolderExpanded : ThingComp, IThingHolder, ISuspendableThingHolder
+    {
+        protected int tickComplete = -1;
+
+        protected ThingOwner innerContainer;
+
+        protected Thing tree;
+
+        private CompTreeConnectionExpanded cachedTreeComp;
+
+        private Material cachedFrontMat;
+
+        protected const int ExpiryDurationTicks = 600;
+
+        public CompProperties_DryadCocoon Props => (CompProperties_DryadCocoon)props;
+
+        public bool IsContentsSuspended => true;
+
+        protected CompTreeConnectionExpanded TreeComp
+        {
+            get
+            {
+                if (cachedTreeComp == null)
+                {
+                    cachedTreeComp = tree?.TryGetComp<CompTreeConnectionExpanded>();
+                }
+                return cachedTreeComp;
+            }
+        }
+
+        private Material FrontMat
+        {
+            get
+            {
+                if (cachedFrontMat == null)
+                {
+                    cachedFrontMat = MaterialPool.MatFrom("Things/Building/Misc/DryadSphere/DryadSphereFront", ShaderDatabase.Cutout);
+                }
+                return cachedFrontMat;
+            }
+        }
+
+        public override void PostSpawnSetup(bool respawningAfterLoad)
+        {
+            if (!respawningAfterLoad)
+            {
+                innerContainer = new ThingOwner<Thing>(this, oneStackOnly: false);
+            }
+        }
+
+        public override void CompTick()
+        {
+            innerContainer.ThingOwnerTick();
+            if (tickComplete >= 0)
+            {
+                if (tree == null || tree.Destroyed)
+                {
+                    parent.Destroy();
+                }
+                else if (Find.TickManager.TicksGame >= tickComplete)
+                {
+                    Complete();
+                }
+            }
+        }
+
+        public override void PostDraw()
+        {
+            if (Props.drawContents)
+            {
+                for (int i = 0; i < innerContainer.Count; i++)
+                {
+                    innerContainer[i].DrawAt(parent.Position.ToVector3ShiftedWithAltitude(AltitudeLayer.BuildingOnTop));
+                }
+                Matrix4x4 matrix = default(Matrix4x4);
+                Vector3 pos = parent.Position.ToVector3ShiftedWithAltitude(AltitudeLayer.BuildingOnTop.AltitudeFor() + 0.01f);
+                Quaternion q = Quaternion.Euler(0f, parent.Rotation.AsAngle, 0f);
+                Vector3 s = new Vector3(parent.Graphic.drawSize.x, 1f, parent.Graphic.drawSize.y);
+                matrix.SetTRS(pos, q, s);
+                Graphics.DrawMesh(MeshPool.plane10, matrix, FrontMat, 0);
+            }
+        }
+
+        public override IEnumerable<Gizmo> CompGetGizmosExtra()
+        {
+            if (tickComplete >= 0 && Prefs.DevMode)
+            {
+                Command_Action command_Action = new Command_Action();
+                command_Action.defaultLabel = "DEV: Complete";
+                command_Action.action = delegate
+                {
+                    Complete();
+                };
+                yield return command_Action;
+            }
+        }
+
+        public virtual void TryAcceptPawn(Pawn p)
+        {
+            p.DeSpawn();
+            innerContainer.TryAddOrTransfer(p, 1);
+            SoundDefOf.Pawn_EnterDryadPod.PlayOneShot(SoundInfo.InMap(parent));
+            if (p.connections == null)
+            {
+                return;
+            }
+            foreach (Thing connectedThing in p.connections.ConnectedThings)
+            {
+                if (connectedThing.TryGetComp<CompTreeConnectionExpanded>() != null)
+                {
+                    tree = connectedThing;
+                    break;
+                }
+            }
+        }
+
+        public override string CompInspectStringExtra()
+        {
+            string text = base.CompInspectStringExtra();
+            if (!text.NullOrEmpty())
+            {
+                text += "\n";
+            }
+            text += "CasketContains".Translate() + ": " + innerContainer.ContentsString.CapitalizeFirst();
+            if (tickComplete >= 0)
+            {
+                text = string.Concat(text, "\n", "TimeLeft".Translate().CapitalizeFirst(), ": ", (tickComplete - Find.TickManager.TicksGame).ToStringTicksToPeriod().Colorize(ColoredText.DateTimeColor));
+            }
+            return text;
+        }
+
+        protected abstract void Complete();
+
+        public ThingOwner GetDirectlyHeldThings()
+        {
+            return innerContainer;
+        }
+
+        public void GetChildHolders(List<IThingHolder> outChildren)
+        {
+            ThingOwnerUtility.AppendThingHoldersFromThings(outChildren, GetDirectlyHeldThings());
+        }
+
+        public override void PostExposeData()
+        {
+            base.PostExposeData();
+            Scribe_Values.Look(ref tickComplete, "tickComplete", -1);
+            Scribe_Deep.Look(ref innerContainer, "innerContainer", this);
+            Scribe_References.Look(ref tree, "tree");
+        }
+    }
+
+}
